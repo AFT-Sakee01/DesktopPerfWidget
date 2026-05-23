@@ -16,6 +16,7 @@ The project is intentionally simple: one C# WinForms source file plus PowerShell
 - Notification-area icon with settings and exit actions.
 - Drag-and-drop metric layout editor for the six visible panel slots.
 - Optional clock window with 24-hour mode, calendar text, and battery/charging display.
+- Clock window thermal alert strip for ACPI thermal zones above 70°C, with critical warning after sustained 95°C.
 - Power-saving mode using Windows EcoQoS power throttling when available and lower process priority.
 - Stable visible desktop mode by default, plus an experimental WorkerW desktop-parent mode.
 - Current-user autostart install/uninstall scripts.
@@ -94,6 +95,7 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DesktopPerfWidgetArm64
 - Settings support width, height, bottom-left pixel position, background transparency, secondary transparency away from the desktop, visibility mode, autostart, power-saving mode, and the separate clock window.
 - The six metric panels are arranged with a drag-and-drop layout editor: drag a metric into slots 1-6 to show it in that order, or click the small `x` on a slot to hide it. Slots are shown as 3 rows by 2 columns, matching the widget's actual panel positions.
 - Settings include an alert-test toggle that forces every visible panel into the full warning state for visual checks.
+- Settings include a temperature-test selector that simulates 75°C or 100°C thermal-zone alerts for UI verification only; it does not create load or change real sensor readings.
 - Power-saving mode is enabled by default and applies process-level Windows EcoQoS power throttling with low process priority when supported.
 - Width, height, and position values are physical screen pixels. The settings UI labels them as window position X/Y and time position X/Y.
 - Width, height, and position can be adjusted with both numeric inputs and sliders.

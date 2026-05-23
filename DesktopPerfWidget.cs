@@ -374,6 +374,7 @@ internal sealed class WidgetForm : Form
     private readonly EventWaitHandle stopEvent;
     private readonly bool useDesktopParent;
     private readonly System.Windows.Forms.Timer timer;
+    private readonly System.Windows.Forms.Timer hoverTimer;
     private readonly List<double> cpuHistory;
     private readonly List<double> memoryHistory;
     private readonly List<double> diskHistory;
@@ -405,6 +406,8 @@ internal sealed class WidgetForm : Form
     private bool hiddenForFullscreen;
     private bool layeredUpdateFailureLogged;
     private ClockForm clockForm;
+    private double hoverOpacityProgress;
+    private DateTime hoverOpacityLastUtc;
 
     public WidgetForm(PdhSampler sampler, EventWaitHandle stopEvent, WidgetSettings settings, bool useDesktopParent)
     {
@@ -453,6 +456,9 @@ internal sealed class WidgetForm : Form
         this.timer = new System.Windows.Forms.Timer();
         this.timer.Interval = 1000;
         this.timer.Tick += OnTimerTick;
+        this.hoverTimer = new System.Windows.Forms.Timer();
+        this.hoverTimer.Interval = 30;
+        this.hoverTimer.Tick += OnHoverTimerTick;
     }
 
     protected override CreateParams CreateParams
@@ -497,6 +503,9 @@ internal sealed class WidgetForm : Form
         this.timer.Stop();
         this.timer.Tick -= OnTimerTick;
         this.timer.Dispose();
+        this.hoverTimer.Stop();
+        this.hoverTimer.Tick -= OnHoverTimerTick;
+        this.hoverTimer.Dispose();
         if (this.settingsForm != null)
         {
             this.settingsForm.OwnerFormClosing = true;
@@ -792,6 +801,7 @@ internal sealed class WidgetForm : Form
         }
 
         ApplyClickThroughStyle();
+        UpdateHoverAnimationTimer();
 
         NativeMethods.SetWindowPos(
             this.Handle,
@@ -812,6 +822,66 @@ internal sealed class WidgetForm : Form
         }
 
         RenderLayeredWindow();
+    }
+
+    private void OnHoverTimerTick(object sender, EventArgs e)
+    {
+        if (UpdateHoverOpacityAnimation())
+        {
+            RenderLayeredWindow();
+        }
+    }
+
+    private void UpdateHoverAnimationTimer()
+    {
+        if (this.currentSettings.HoverOpacityEnabled)
+        {
+            if (!this.hoverTimer.Enabled)
+            {
+                this.hoverOpacityLastUtc = DateTime.UtcNow;
+                this.hoverTimer.Start();
+            }
+
+            return;
+        }
+
+        if (this.hoverTimer.Enabled)
+        {
+            this.hoverTimer.Stop();
+        }
+
+        if (this.hoverOpacityProgress > 0.0)
+        {
+            this.hoverOpacityProgress = 0.0;
+            RenderLayeredWindow();
+        }
+    }
+
+    private bool UpdateHoverOpacityAnimation()
+    {
+        DateTime now = DateTime.UtcNow;
+        double elapsed = this.hoverOpacityLastUtc == DateTime.MinValue ? 0.03 : (now - this.hoverOpacityLastUtc).TotalSeconds;
+        this.hoverOpacityLastUtc = now;
+
+        bool hovered =
+            this.currentSettings.HoverOpacityEnabled &&
+            !this.hiddenForFullscreen &&
+            this.Visible &&
+            this.Bounds.Contains(Cursor.Position);
+
+        double target = hovered ? 1.0 : 0.0;
+        double old = this.hoverOpacityProgress;
+        double step = Math.Max(0.0, Math.Min(1.0, elapsed / 0.15));
+        if (this.hoverOpacityProgress < target)
+        {
+            this.hoverOpacityProgress = Math.Min(target, this.hoverOpacityProgress + step);
+        }
+        else if (this.hoverOpacityProgress > target)
+        {
+            this.hoverOpacityProgress = Math.Max(target, this.hoverOpacityProgress - step);
+        }
+
+        return Math.Abs(old - this.hoverOpacityProgress) > 0.001;
     }
 
     private void ApplyClickThroughStyle()
@@ -1290,13 +1360,34 @@ internal sealed class WidgetForm : Form
 
     private byte GetApplicationOpacityAlpha()
     {
+        int alpha;
         if (NativeMethods.IsForegroundDesktopOrShell(this.Handle))
         {
-            return 255;
+            alpha = 255;
+        }
+        else
+        {
+            alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
         }
 
-        int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
-        return (byte)Math.Max(0, Math.Min(255, alpha));
+        return (byte)ApplyHoverTransparencyTarget(Math.Max(0, Math.Min(255, alpha)));
+    }
+
+    private int ApplyHoverTransparencyTarget(int alpha)
+    {
+        if (!this.currentSettings.HoverOpacityEnabled || this.hoverOpacityProgress <= 0.0)
+        {
+            return alpha;
+        }
+
+        int hoverAlpha = (int)Math.Round(255.0 * 0.05);
+        if (alpha <= hoverAlpha)
+        {
+            return alpha;
+        }
+
+        double animated = alpha + (hoverAlpha - alpha) * this.hoverOpacityProgress;
+        return Math.Max(0, Math.Min(255, (int)Math.Round(animated)));
     }
 
     private void DrawUsageAlertLayer(Graphics g, RectangleF rect, double alertPercent, bool alertIconVisible)
@@ -1727,12 +1818,19 @@ internal sealed class WidgetForm : Form
 internal sealed class ClockForm : Form
 {
     private readonly System.Windows.Forms.Timer timer;
+    private readonly System.Windows.Forms.Timer hoverTimer;
+    private readonly Dictionary<string, DateTime> thermalCriticalSinceUtc = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
     private WidgetSettings currentSettings;
     private float scale;
     private bool hiddenForFullscreen;
     private bool layeredUpdateFailureLogged;
     private PowerReading cachedPowerReading;
     private DateTime cachedPowerReadingUtc;
+    private List<ThermalReading> cachedThermalReadings = new List<ThermalReading>();
+    private DateTime cachedThermalReadingsUtc;
+    private int renderTickCount;
+    private double hoverOpacityProgress;
+    private DateTime hoverOpacityLastUtc;
 
     private struct PowerReading
     {
@@ -1740,6 +1838,13 @@ internal sealed class ClockForm : Form
         public bool IsCharging;
         public bool WattsKnown;
         public double Watts;
+    }
+
+    private sealed class ThermalReading
+    {
+        public string Name { get; set; }
+        public double Celsius { get; set; }
+        public bool CriticalActive { get; set; }
     }
 
     public ClockForm(WidgetSettings settings)
@@ -1765,12 +1870,15 @@ internal sealed class ClockForm : Form
         this.StartPosition = FormStartPosition.Manual;
         this.BackColor = Color.FromArgb(18, 19, 22);
         this.MinimumSize = new Size(WidgetSettings.MinClockWidth, WidgetSettings.MinClockHeight);
-        this.MaximumSize = new Size(WidgetSettings.MaxClockWidth, WidgetSettings.MaxClockHeight);
+        this.MaximumSize = new Size(WidgetSettings.MaxClockWidth, WidgetSettings.MaxClockHeight + S(32));
         this.Size = new Size(this.currentSettings.ClockWidth, this.currentSettings.ClockHeight);
 
         this.timer = new System.Windows.Forms.Timer();
         this.timer.Interval = 250;
-        this.timer.Tick += delegate { RenderLayeredWindow(); };
+        this.timer.Tick += OnTimerTick;
+        this.hoverTimer = new System.Windows.Forms.Timer();
+        this.hoverTimer.Interval = 30;
+        this.hoverTimer.Tick += OnHoverTimerTick;
     }
 
     protected override CreateParams CreateParams
@@ -1798,9 +1906,25 @@ internal sealed class ClockForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         this.timer.Stop();
-        this.timer.Tick -= delegate { RenderLayeredWindow(); };
+        this.timer.Tick -= OnTimerTick;
         this.timer.Dispose();
+        this.hoverTimer.Stop();
+        this.hoverTimer.Tick -= OnHoverTimerTick;
+        this.hoverTimer.Dispose();
         base.OnFormClosed(e);
+    }
+
+    private void OnTimerTick(object sender, EventArgs e)
+    {
+        this.renderTickCount++;
+        Size desiredSize = GetDesiredClockSize();
+        if (this.Size != desiredSize)
+        {
+            this.Size = desiredSize;
+            PositionClock();
+        }
+
+        RenderLayeredWindow();
     }
 
     protected override void OnSizeChanged(EventArgs e)
@@ -1829,10 +1953,16 @@ internal sealed class ClockForm : Form
 
     public void ApplyRuntimeSettings(WidgetSettings settings)
     {
+        ThermalTestMode oldThermalTestMode = this.currentSettings.ThermalTestMode;
         this.currentSettings = settings.Clone();
         this.currentSettings.Normalize();
+        if (oldThermalTestMode != this.currentSettings.ThermalTestMode)
+        {
+            this.thermalCriticalSinceUtc.Clear();
+            this.cachedThermalReadingsUtc = DateTime.MinValue;
+        }
 
-        Size desiredSize = new Size(this.currentSettings.ClockWidth, this.currentSettings.ClockHeight);
+        Size desiredSize = GetDesiredClockSize();
         if (this.Size != desiredSize)
         {
             this.Size = desiredSize;
@@ -1845,6 +1975,7 @@ internal sealed class ClockForm : Form
         }
 
         ApplyClickThroughStyle();
+        UpdateHoverAnimationTimer();
         NativeMethods.SetWindowPos(
             this.Handle,
             shouldBeTopMost ? NativeMethods.HWND_TOPMOST : NativeMethods.HWND_NOTOPMOST,
@@ -1858,6 +1989,66 @@ internal sealed class ClockForm : Form
 
         PositionClock();
         RenderLayeredWindow();
+    }
+
+    private void OnHoverTimerTick(object sender, EventArgs e)
+    {
+        if (UpdateHoverOpacityAnimation())
+        {
+            RenderLayeredWindow();
+        }
+    }
+
+    private void UpdateHoverAnimationTimer()
+    {
+        if (this.currentSettings.HoverOpacityEnabled)
+        {
+            if (!this.hoverTimer.Enabled)
+            {
+                this.hoverOpacityLastUtc = DateTime.UtcNow;
+                this.hoverTimer.Start();
+            }
+
+            return;
+        }
+
+        if (this.hoverTimer.Enabled)
+        {
+            this.hoverTimer.Stop();
+        }
+
+        if (this.hoverOpacityProgress > 0.0)
+        {
+            this.hoverOpacityProgress = 0.0;
+            RenderLayeredWindow();
+        }
+    }
+
+    private bool UpdateHoverOpacityAnimation()
+    {
+        DateTime now = DateTime.UtcNow;
+        double elapsed = this.hoverOpacityLastUtc == DateTime.MinValue ? 0.03 : (now - this.hoverOpacityLastUtc).TotalSeconds;
+        this.hoverOpacityLastUtc = now;
+
+        bool hovered =
+            this.currentSettings.HoverOpacityEnabled &&
+            !this.hiddenForFullscreen &&
+            this.Visible &&
+            this.Bounds.Contains(Cursor.Position);
+
+        double target = hovered ? 1.0 : 0.0;
+        double old = this.hoverOpacityProgress;
+        double step = Math.Max(0.0, Math.Min(1.0, elapsed / 0.15));
+        if (this.hoverOpacityProgress < target)
+        {
+            this.hoverOpacityProgress = Math.Min(target, this.hoverOpacityProgress + step);
+        }
+        else if (this.hoverOpacityProgress > target)
+        {
+            this.hoverOpacityProgress = Math.Max(target, this.hoverOpacityProgress - step);
+        }
+
+        return Math.Abs(old - this.hoverOpacityProgress) > 0.001;
     }
 
     public void SetHiddenForFullscreen(bool hidden)
@@ -1890,9 +2081,16 @@ internal sealed class ClockForm : Form
         }
 
         Rectangle workArea = Screen.PrimaryScreen.WorkingArea;
+        Size desiredSize = GetDesiredClockSize();
+        if (this.Size != desiredSize)
+        {
+            this.Size = desiredSize;
+        }
+
         int left = Math.Max(workArea.Left, Math.Min(this.currentSettings.ClockLeftX, workArea.Right - this.Width));
-        int top = this.currentSettings.ClockBottomY - this.Height + 1;
-        top = Math.Max(workArea.Top, Math.Min(top, workArea.Bottom - this.Height));
+        int baseHeight = Math.Max(WidgetSettings.MinClockHeight, this.currentSettings.ClockHeight);
+        int top = this.currentSettings.ClockBottomY - baseHeight + 1;
+        top = Math.Max(workArea.Top, Math.Min(top, workArea.Bottom - baseHeight));
         this.Location = new Point(left, top);
 
         NativeMethods.SetWindowPos(
@@ -1906,6 +2104,17 @@ internal sealed class ClockForm : Form
             NativeMethods.SWP_NOOWNERZORDER |
             NativeMethods.SWP_FRAMECHANGED |
             NativeMethods.SWP_SHOWWINDOW);
+    }
+
+    private Size GetDesiredClockSize()
+    {
+        int extraHeight = GetThermalAlerts().Count > 0 ? GetThermalAlertExtraHeight() : 0;
+        return new Size(this.currentSettings.ClockWidth, this.currentSettings.ClockHeight + extraHeight);
+    }
+
+    private int GetThermalAlertExtraHeight()
+    {
+        return Math.Max(S(24), Math.Min(S(32), (int)Math.Round(this.currentSettings.ClockHeight * 0.42f)));
     }
 
     private void ApplyClickThroughStyle()
@@ -1963,45 +2172,64 @@ internal sealed class ClockForm : Form
 
         string formatText = this.currentSettings.ClockUse24Hour ? "HH:mm:ss" : "h:mm:ss tt";
         string timeText = DateTime.Now.ToString(formatText);
-        RectangleF textRect = new RectangleF(S(12), S(5), Math.Max(10, this.Width - S(24)), Math.Max(10, this.Height - S(10)));
+        List<ThermalReading> thermalAlerts = GetThermalAlerts();
+        float baseHeight = Math.Min(this.currentSettings.ClockHeight, this.Height);
+        float thermalReserve = thermalAlerts.Count > 0 ? Math.Max(S(18), GetThermalAlertExtraHeight() - S(6)) : 0.0f;
+        RectangleF textRect = new RectangleF(
+            S(12),
+            S(5),
+            Math.Max(10, this.Width - S(24)),
+            Math.Max(10, baseHeight - S(10)));
+
         if (this.currentSettings.ClockCalendarEnabled || this.currentSettings.ClockPowerEnabled)
         {
             DrawClockWithInfo(g, timeText, textRect);
-            return;
         }
-
-        float fontSize = Math.Max(14.0f, Math.Min(this.Height * 0.56f, this.Width * 0.16f));
-
-        using (Font baseFont = new Font("Segoe UI", fontSize, FontStyle.Bold, GraphicsUnit.Pixel))
-        using (SolidBrush brush = new SolidBrush(Color.FromArgb(244, 248, 250)))
-        using (StringFormat format = new StringFormat())
+        else
         {
-            format.Alignment = StringAlignment.Center;
-            format.LineAlignment = StringAlignment.Center;
-            format.Trimming = StringTrimming.EllipsisCharacter;
-            format.FormatFlags = StringFormatFlags.NoWrap;
+            float fontSize = Math.Max(14.0f, Math.Min(textRect.Height * 0.74f, this.Width * 0.16f));
 
-            Font drawFont = baseFont;
-            bool disposeFont = false;
-            float size = baseFont.Size;
-            while (size > 10.0f * this.scale && g.MeasureString(timeText, drawFont).Width > textRect.Width)
+            using (Font baseFont = new Font("Segoe UI", fontSize, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (SolidBrush brush = new SolidBrush(Color.FromArgb(244, 248, 250)))
+            using (StringFormat format = new StringFormat())
             {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+                format.Trimming = StringTrimming.EllipsisCharacter;
+                format.FormatFlags = StringFormatFlags.NoWrap;
+
+                Font drawFont = baseFont;
+                bool disposeFont = false;
+                float size = baseFont.Size;
+                while (size > 10.0f * this.scale && g.MeasureString(timeText, drawFont).Width > textRect.Width)
+                {
+                    if (disposeFont)
+                    {
+                        drawFont.Dispose();
+                    }
+
+                    size -= 1.0f * this.scale;
+                    drawFont = new Font(baseFont.FontFamily, size, baseFont.Style, GraphicsUnit.Pixel);
+                    disposeFont = true;
+                }
+
+                g.DrawString(timeText, drawFont, brush, textRect, format);
+
                 if (disposeFont)
                 {
                     drawFont.Dispose();
                 }
-
-                size -= 1.0f * this.scale;
-                drawFont = new Font(baseFont.FontFamily, size, baseFont.Style, GraphicsUnit.Pixel);
-                disposeFont = true;
             }
+        }
 
-            g.DrawString(timeText, drawFont, brush, textRect, format);
-
-            if (disposeFont)
-            {
-                drawFont.Dispose();
-            }
+        if (thermalAlerts.Count > 0)
+        {
+            RectangleF thermalRect = new RectangleF(
+                S(12),
+                baseHeight + S(3),
+                Math.Max(10, this.Width - S(24)),
+                thermalReserve);
+            DrawThermalAlerts(g, thermalRect, thermalAlerts);
         }
     }
 
@@ -2078,6 +2306,147 @@ internal sealed class ClockForm : Form
         }
     }
 
+    private void DrawThermalAlerts(Graphics g, RectangleF bounds, List<ThermalReading> alerts)
+    {
+        if (alerts == null || alerts.Count == 0 || bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return;
+        }
+
+        int total = alerts.Count;
+        int visibleSensors = Math.Min(3, total);
+        bool hasMore = total > 3;
+        if (visibleSensors <= 0)
+        {
+            return;
+        }
+
+        float gap = S(6);
+        float chipHeight = Math.Max(S(16), bounds.Height - S(2));
+        float chipTop = bounds.Top + Math.Max(0.0f, (bounds.Height - chipHeight) / 2.0f);
+
+        using (Font chipFont = new Font("Segoe UI", Math.Max(8.0f, 9.5f * this.scale), FontStyle.Bold, GraphicsUnit.Pixel))
+        {
+            float moreWidth = 0.0f;
+            if (hasMore)
+            {
+                string moreText = "+" + (total - visibleSensors).ToString();
+                moreWidth = Math.Max(S(30), g.MeasureString(moreText, chipFont).Width + S(18));
+                moreWidth = Math.Min(moreWidth, bounds.Width * 0.28f);
+                RectangleF moreRect = new RectangleF(bounds.Right - moreWidth, chipTop, moreWidth, chipHeight);
+                double hiddenMaxTemp = 0.0;
+                for (int i = visibleSensors; i < total; i++)
+                {
+                    hiddenMaxTemp = Math.Max(hiddenMaxTemp, alerts[i].Celsius);
+                }
+
+                DrawThermalChip(g, moreRect, moreText, hiddenMaxTemp, false, chipFont);
+            }
+
+            float sensorAreaRight = hasMore ? bounds.Right - moreWidth - gap : bounds.Right;
+            float sensorAreaWidth = Math.Max(S(30), sensorAreaRight - bounds.Left);
+            float slotWidth = Math.Max(S(30), (sensorAreaWidth - gap * 2.0f) / 3.0f);
+            float x = bounds.Left;
+            for (int i = 0; i < visibleSensors; i++)
+            {
+                string text = FormatThermalSensorName(alerts[i].Name);
+                float desiredWidth = g.MeasureString(text, chipFont).Width + S(alerts[i].CriticalActive ? 32 : 20);
+                float width = Math.Min(slotWidth, Math.Max(S(30), desiredWidth));
+                RectangleF chipRect = new RectangleF(x, chipTop, width, chipHeight);
+                DrawThermalChip(g, chipRect, text, alerts[i].Celsius, alerts[i].CriticalActive, chipFont);
+                x += slotWidth + gap;
+            }
+        }
+    }
+
+    private void DrawThermalChip(Graphics g, RectangleF rect, string text, double celsius, bool criticalActive, Font font)
+    {
+        float radius = Math.Min(rect.Height / 2.0f, S(11));
+        int redAlpha = GetThermalRedAlpha(celsius);
+        using (GraphicsPath path = RoundedRectangle(rect, radius))
+        using (SolidBrush baseBrush = new SolidBrush(Color.FromArgb(160, 28, 28, 30)))
+        using (SolidBrush redBrush = new SolidBrush(Color.FromArgb(redAlpha, 255, 44, 58)))
+        using (Pen border = new Pen(Color.FromArgb(45, 255, 255, 255), Math.Max(1.0f, this.scale)))
+        {
+            g.FillPath(baseBrush, path);
+            g.FillPath(redBrush, path);
+            g.DrawPath(border, path);
+        }
+
+        RectangleF textRect = rect;
+        if (criticalActive)
+        {
+            float iconSize = Math.Max(S(12), Math.Min(rect.Height * 0.70f, S(17)));
+            RectangleF iconRect = new RectangleF(rect.Right - iconSize - S(7), rect.Top + (rect.Height - iconSize) / 2.0f, iconSize, iconSize);
+            DrawSmallWarningIcon(g, iconRect);
+            textRect = new RectangleF(rect.Left + S(8), rect.Top, Math.Max(4, rect.Width - iconSize - S(18)), rect.Height);
+        }
+        else
+        {
+            textRect = new RectangleF(rect.Left + S(8), rect.Top, Math.Max(4, rect.Width - S(16)), rect.Height);
+        }
+
+        using (SolidBrush textBrush = new SolidBrush(Color.FromArgb(246, 246, 246)))
+        {
+            DrawClockFittedText(g, text, font, textBrush, textRect, StringAlignment.Near);
+        }
+    }
+
+    private void DrawSmallWarningIcon(Graphics g, RectangleF rect)
+    {
+        int warningAlpha = (this.renderTickCount % 2 == 0) ? 77 : 179;
+        float centerX = rect.Left + rect.Width / 2.0f;
+        float centerY = rect.Top + rect.Height / 2.0f;
+        float size = Math.Min(rect.Width, rect.Height);
+        PointF[] triangle = new PointF[]
+        {
+            new PointF(centerX, centerY - size * 0.46f),
+            new PointF(centerX - size * 0.48f, centerY + size * 0.42f),
+            new PointF(centerX + size * 0.48f, centerY + size * 0.42f)
+        };
+
+        using (Pen pen = new Pen(Color.FromArgb(warningAlpha, 255, 207, 82), Math.Max(1.0f, 2.0f * this.scale)))
+        {
+            pen.LineJoin = LineJoin.Round;
+            g.DrawPolygon(pen, triangle);
+        }
+
+        using (Font markFont = new Font("Segoe UI", Math.Max(7.0f, size * 0.66f), FontStyle.Bold, GraphicsUnit.Pixel))
+        using (SolidBrush markBrush = new SolidBrush(Color.FromArgb(warningAlpha, 255, 207, 82)))
+        using (StringFormat format = new StringFormat())
+        {
+            format.Alignment = StringAlignment.Center;
+            format.LineAlignment = StringAlignment.Center;
+            g.DrawString("!", markFont, markBrush, rect, format);
+        }
+    }
+
+    private static int GetThermalRedAlpha(double celsius)
+    {
+        double progress = (celsius - 70.0) / 30.0;
+        if (progress < 0.0)
+        {
+            progress = 0.0;
+        }
+        else if (progress > 1.0)
+        {
+            progress = 1.0;
+        }
+
+        double alpha = 0.30 + progress * (0.85 - 0.30);
+        return (int)Math.Round(alpha * 255.0);
+    }
+
+    private static string FormatThermalSensorName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return "TZ";
+        }
+
+        return name.Trim();
+    }
+
     private void DrawClockFittedText(Graphics g, string text, Font baseFont, Brush brush, RectangleF rect, StringAlignment alignment)
     {
         using (StringFormat format = new StringFormat())
@@ -2139,6 +2508,211 @@ internal sealed class ClockForm : Form
         this.cachedPowerReading = ReadPowerReading();
         this.cachedPowerReadingUtc = now;
         return this.cachedPowerReading;
+    }
+
+    private List<ThermalReading> GetThermalAlerts()
+    {
+        DateTime now = DateTime.UtcNow;
+        if (this.currentSettings.ThermalTestMode != ThermalTestMode.Off)
+        {
+            List<ThermalReading> simulated = BuildSimulatedThermalReadings(this.currentSettings.ThermalTestMode);
+            UpdateThermalCriticalStates(simulated, now, true);
+            simulated.Sort(CompareThermalReading);
+            return simulated;
+        }
+
+        if ((now - this.cachedThermalReadingsUtc).TotalSeconds >= 2.0)
+        {
+            this.cachedThermalReadings = ReadThermalReadings();
+            if (this.cachedThermalReadings == null)
+            {
+                this.cachedThermalReadings = new List<ThermalReading>();
+            }
+
+            this.cachedThermalReadingsUtc = now;
+            UpdateThermalCriticalStates(this.cachedThermalReadings, now, false);
+        }
+
+        List<ThermalReading> alerts = new List<ThermalReading>();
+        for (int i = 0; i < this.cachedThermalReadings.Count; i++)
+        {
+            if (this.cachedThermalReadings[i].Celsius >= 70.0)
+            {
+                alerts.Add(this.cachedThermalReadings[i]);
+            }
+        }
+
+        alerts.Sort(CompareThermalReading);
+        return alerts;
+    }
+
+    private void UpdateThermalCriticalStates(List<ThermalReading> readings, DateTime now, bool instantCritical)
+    {
+        if (readings == null)
+        {
+            return;
+        }
+
+        HashSet<string> activeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < readings.Count; i++)
+        {
+            ThermalReading reading = readings[i];
+            if (reading == null)
+            {
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(reading.Name))
+            {
+                continue;
+            }
+
+            activeNames.Add(reading.Name);
+            if (reading.Celsius >= 95.0)
+            {
+                DateTime since;
+                if (!this.thermalCriticalSinceUtc.TryGetValue(reading.Name, out since))
+                {
+                    since = instantCritical ? now.AddSeconds(-3.0) : now;
+                    this.thermalCriticalSinceUtc[reading.Name] = since;
+                }
+
+                reading.CriticalActive = (now - since).TotalSeconds >= 3.0;
+            }
+            else
+            {
+                this.thermalCriticalSinceUtc.Remove(reading.Name);
+                reading.CriticalActive = false;
+            }
+        }
+
+        List<string> stale = new List<string>();
+        foreach (string name in this.thermalCriticalSinceUtc.Keys)
+        {
+            if (!activeNames.Contains(name))
+            {
+                stale.Add(name);
+            }
+        }
+
+        for (int i = 0; i < stale.Count; i++)
+        {
+            this.thermalCriticalSinceUtc.Remove(stale[i]);
+        }
+    }
+
+    private static int CompareThermalReading(ThermalReading left, ThermalReading right)
+    {
+        int value = right.Celsius.CompareTo(left.Celsius);
+        if (value != 0)
+        {
+            return value;
+        }
+
+        return string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<ThermalReading> ReadThermalReadings()
+    {
+        List<ThermalReading> readings = new List<ThermalReading>();
+        try
+        {
+            using (ManagementObjectSearcher searcher = new ManagementObjectSearcher("root\\cimv2", "SELECT Name, Temperature, HighPrecisionTemperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation"))
+            using (ManagementObjectCollection collection = searcher.Get())
+            {
+                foreach (ManagementObject item in collection)
+                {
+                    string name = Convert.ToString(GetManagementValue(item, "Name"));
+                    double celsius = ConvertThermalZoneCelsius(
+                        GetManagementValue(item, "Temperature"),
+                        GetManagementValue(item, "HighPrecisionTemperature"));
+                    if (string.IsNullOrEmpty(name) || celsius <= 0.0)
+                    {
+                        continue;
+                    }
+
+                    readings.Add(new ThermalReading
+                    {
+                        Name = name.Trim(),
+                        Celsius = celsius,
+                        CriticalActive = false
+                    });
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return readings;
+    }
+
+    private List<ThermalReading> BuildSimulatedThermalReadings(ThermalTestMode mode)
+    {
+        double celsius = mode == ThermalTestMode.Simulate100 ? 100.0 : 75.0;
+        DateTime now = DateTime.UtcNow;
+        if ((now - this.cachedThermalReadingsUtc).TotalSeconds >= 2.0 || this.cachedThermalReadings.Count == 0)
+        {
+            this.cachedThermalReadings = ReadThermalReadings();
+            if (this.cachedThermalReadings == null)
+            {
+                this.cachedThermalReadings = new List<ThermalReading>();
+            }
+
+            this.cachedThermalReadingsUtc = now;
+        }
+
+        List<ThermalReading> readings = new List<ThermalReading>();
+        HashSet<string> usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < this.cachedThermalReadings.Count; i++)
+        {
+            string name = this.cachedThermalReadings[i].Name;
+            if (string.IsNullOrEmpty(name) || !usedNames.Add(name))
+            {
+                continue;
+            }
+
+            readings.Add(new ThermalReading
+            {
+                Name = name,
+                Celsius = celsius,
+                CriticalActive = false
+            });
+        }
+
+        if (readings.Count > 0)
+        {
+            return readings;
+        }
+
+        for (int i = 0; i < 6; i++)
+        {
+            readings.Add(new ThermalReading
+            {
+                Name = @"\_SB.TZ" + i.ToString(),
+                Celsius = celsius,
+                CriticalActive = false
+            });
+        }
+
+        return readings;
+    }
+
+    private static double ConvertThermalZoneCelsius(object temperature, object highPrecisionTemperature)
+    {
+        double highPrecision = ToPositiveDouble(highPrecisionTemperature);
+        if (highPrecision > 0.0)
+        {
+            return highPrecision / 10.0 - 273.15;
+        }
+
+        double standard = ToPositiveDouble(temperature);
+        if (standard > 0.0)
+        {
+            return standard - 273.15;
+        }
+
+        return 0.0;
     }
 
     private static PowerReading ReadPowerReading()
@@ -2230,6 +2804,24 @@ internal sealed class ClockForm : Form
         catch
         {
             return null;
+        }
+    }
+
+    private static double ToPositiveDouble(object value)
+    {
+        if (value == null)
+        {
+            return 0.0;
+        }
+
+        try
+        {
+            double number = Convert.ToDouble(value);
+            return number > 0.0 ? number : 0.0;
+        }
+        catch
+        {
+            return 0.0;
         }
     }
 
@@ -2331,13 +2923,34 @@ internal sealed class ClockForm : Form
 
     private byte GetApplicationOpacityAlpha()
     {
+        int alpha;
         if (NativeMethods.IsForegroundDesktopOrShell(this.Handle))
         {
-            return 255;
+            alpha = 255;
+        }
+        else
+        {
+            alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
         }
 
-        int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
-        return (byte)Math.Max(0, Math.Min(255, alpha));
+        return (byte)ApplyHoverTransparencyTarget(Math.Max(0, Math.Min(255, alpha)));
+    }
+
+    private int ApplyHoverTransparencyTarget(int alpha)
+    {
+        if (!this.currentSettings.HoverOpacityEnabled || this.hoverOpacityProgress <= 0.0)
+        {
+            return alpha;
+        }
+
+        int hoverAlpha = (int)Math.Round(255.0 * 0.05);
+        if (alpha <= hoverAlpha)
+        {
+            return alpha;
+        }
+
+        double animated = alpha + (hoverAlpha - alpha) * this.hoverOpacityProgress;
+        return Math.Max(0, Math.Min(255, (int)Math.Round(animated)));
     }
 
     private int S(int value)
@@ -2387,6 +3000,13 @@ internal enum WidgetVisibilityMode
     DesktopOnly,
     AlwaysVisible,
     HideWhenFullscreen
+}
+
+internal enum ThermalTestMode
+{
+    Off,
+    Simulate75,
+    Simulate100
 }
 
 internal sealed class WidgetSettings
@@ -2441,7 +3061,9 @@ internal sealed class WidgetSettings
     public bool ShowGpu { get; set; }
     public bool ShowNpu { get; set; }
     public bool AlertTestEnabled { get; set; }
+    public ThermalTestMode ThermalTestMode { get; set; }
     public bool PowerSavingEnabled { get; set; }
+    public bool HoverOpacityEnabled { get; set; }
     public string[] MetricOrder { get; set; }
 
     public static string SettingsPath
@@ -2475,7 +3097,9 @@ internal sealed class WidgetSettings
         this.ShowGpu = true;
         this.ShowNpu = true;
         this.AlertTestEnabled = false;
+        this.ThermalTestMode = ThermalTestMode.Off;
         this.PowerSavingEnabled = true;
+        this.HoverOpacityEnabled = false;
         this.MetricOrder = CloneMetricOrder(DefaultMetricOrder);
     }
 
@@ -2513,7 +3137,9 @@ internal sealed class WidgetSettings
         settings.ShowGpu = true;
         settings.ShowNpu = true;
         settings.AlertTestEnabled = false;
+        settings.ThermalTestMode = ThermalTestMode.Off;
         settings.PowerSavingEnabled = true;
+        settings.HoverOpacityEnabled = false;
         settings.MetricOrder = CloneMetricOrder(DefaultMetricOrder);
         settings.Normalize();
         return settings;
@@ -2546,7 +3172,9 @@ internal sealed class WidgetSettings
             ShowGpu = this.ShowGpu,
             ShowNpu = this.ShowNpu,
             AlertTestEnabled = this.AlertTestEnabled,
+            ThermalTestMode = this.ThermalTestMode,
             PowerSavingEnabled = this.PowerSavingEnabled,
+            HoverOpacityEnabled = this.HoverOpacityEnabled,
             MetricOrder = CloneMetricOrder(this.MetricOrder)
         };
     }
@@ -2653,7 +3281,9 @@ internal sealed class WidgetSettings
             "ShowGpu=" + this.ShowGpu,
             "ShowNpu=" + this.ShowNpu,
             "AlertTestEnabled=" + this.AlertTestEnabled,
+            "ThermalTestMode=" + this.ThermalTestMode,
             "PowerSavingEnabled=" + this.PowerSavingEnabled,
+            "HoverOpacityEnabled=" + this.HoverOpacityEnabled,
             "MetricOrder=" + string.Join(",", NormalizeMetricOrder(this.MetricOrder))
         };
         File.WriteAllLines(SettingsPath, lines);
@@ -2798,9 +3428,29 @@ internal sealed class WidgetSettings
             return;
         }
 
+        if (string.Equals(key, "ThermalTestMode", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                settings.ThermalTestMode = (ThermalTestMode)Enum.Parse(typeof(ThermalTestMode), value, true);
+            }
+            catch
+            {
+                settings.ThermalTestMode = ThermalTestMode.Off;
+            }
+
+            return;
+        }
+
         if (string.Equals(key, "PowerSavingEnabled", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out boolValue))
         {
             settings.PowerSavingEnabled = boolValue;
+            return;
+        }
+
+        if (string.Equals(key, "HoverOpacityEnabled", StringComparison.OrdinalIgnoreCase) && bool.TryParse(value, out boolValue))
+        {
+            settings.HoverOpacityEnabled = boolValue;
             return;
         }
 
@@ -3005,9 +3655,11 @@ internal sealed class SettingsForm : Form
     private TrackBar clockBottomYSlider;
     private TrackBar clockTransparencySlider;
     private ComboBox visibilityCombo;
+    private ComboBox thermalTestCombo;
     private Button alertTestButton;
     private CheckBox startupCheck;
     private CheckBox powerSavingCheck;
+    private CheckBox hoverOpacityCheck;
     private CheckBox clockUse24HourCheck;
     private CheckBox clockCalendarCheck;
     private CheckBox clockPowerCheck;
@@ -3063,10 +3715,10 @@ internal sealed class SettingsForm : Form
         root.BackColor = DarkTheme.Window;
         root.ColumnCount = 4;
         root.RowCount = 20;
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 168));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 360));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 380));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
@@ -3115,6 +3767,7 @@ internal sealed class SettingsForm : Form
         this.clockBottomYSlider = BuildSlider(Screen.PrimaryScreen.Bounds.Top, Screen.PrimaryScreen.Bounds.Bottom - 1);
         this.clockTransparencySlider = BuildSlider(WidgetSettings.MinBackgroundTransparency, WidgetSettings.MaxBackgroundTransparency);
         this.visibilityCombo = BuildCombo();
+        this.thermalTestCombo = BuildCombo();
         this.alertTestButton = new Button();
         this.alertTestButton.Width = 96;
         this.alertTestButton.Height = 44;
@@ -3144,6 +3797,12 @@ internal sealed class SettingsForm : Form
         this.powerSavingCheck.ForeColor = DarkTheme.Text;
         this.powerSavingCheck.BackColor = DarkTheme.Window;
         this.powerSavingCheck.CheckedChanged += OnSettingChanged;
+        this.hoverOpacityCheck = new CheckBox();
+        this.hoverOpacityCheck.Text = "悬停透明 95%";
+        this.hoverOpacityCheck.AutoSize = true;
+        this.hoverOpacityCheck.ForeColor = DarkTheme.Text;
+        this.hoverOpacityCheck.BackColor = DarkTheme.Window;
+        this.hoverOpacityCheck.CheckedChanged += OnSettingChanged;
         this.clockUse24HourCheck = new CheckBox();
         this.clockUse24HourCheck.Text = "24 小时制";
         this.clockUse24HourCheck.AutoSize = true;
@@ -3184,6 +3843,7 @@ internal sealed class SettingsForm : Form
         Control alertEditor = BuildButtonEditor(this.alertTestButton);
         root.SetColumnSpan(alertEditor, 2);
         root.Controls.Add(alertEditor, 1, 7);
+        AddEditorRow(root, 16, "温度测试", this.thermalTestCombo);
 
         FlowLayoutPanel runtimeOptions = new FlowLayoutPanel();
         runtimeOptions.Dock = DockStyle.Fill;
@@ -3192,9 +3852,11 @@ internal sealed class SettingsForm : Form
         runtimeOptions.BackColor = DarkTheme.Window;
         runtimeOptions.Padding = new Padding(0, 10, 0, 0);
         this.startupCheck.Margin = new Padding(0, 0, 34, 0);
-        this.powerSavingCheck.Margin = new Padding(0, 0, 0, 0);
+        this.powerSavingCheck.Margin = new Padding(0, 0, 34, 0);
+        this.hoverOpacityCheck.Margin = new Padding(0, 0, 0, 0);
         runtimeOptions.Controls.Add(this.startupCheck);
         runtimeOptions.Controls.Add(this.powerSavingCheck);
+        runtimeOptions.Controls.Add(this.hoverOpacityCheck);
         AddLabel(root, 8, "运行选项");
         root.SetColumnSpan(runtimeOptions, 2);
         root.Controls.Add(runtimeOptions, 1, 8);
@@ -3281,6 +3943,9 @@ internal sealed class SettingsForm : Form
         this.visibilityCombo.Items.Add(new ComboOption("仅桌面可见", WidgetVisibilityMode.DesktopOnly));
         this.visibilityCombo.Items.Add(new ComboOption("一直可见", WidgetVisibilityMode.AlwaysVisible));
         this.visibilityCombo.Items.Add(new ComboOption("仅全屏不可见", WidgetVisibilityMode.HideWhenFullscreen));
+        this.thermalTestCombo.Items.Add(new ComboOption("关闭", ThermalTestMode.Off));
+        this.thermalTestCombo.Items.Add(new ComboOption("模拟 75 度", ThermalTestMode.Simulate75));
+        this.thermalTestCombo.Items.Add(new ComboOption("模拟 100 度", ThermalTestMode.Simulate100));
 
         WirePair(this.widthBox, this.widthSlider);
         WirePair(this.heightBox, this.heightSlider);
@@ -3297,7 +3962,7 @@ internal sealed class SettingsForm : Form
 
     private static Size GetDesiredClientSize()
     {
-        return new Size(1160, 1200);
+        return new Size(1280, 1200);
     }
 
     private static Size FitClientSizeToScreen(Size desiredSize)
@@ -3648,9 +4313,11 @@ internal sealed class SettingsForm : Form
             SelectComboValue(this.visibilityCombo, settings.VisibilityMode);
             this.startupCheck.Checked = settings.StartupEnabled;
             this.powerSavingCheck.Checked = settings.PowerSavingEnabled;
+            this.hoverOpacityCheck.Checked = settings.HoverOpacityEnabled;
             this.clockUse24HourCheck.Checked = settings.ClockUse24Hour;
             this.clockCalendarCheck.Checked = settings.ClockCalendarEnabled;
             this.clockPowerCheck.Checked = settings.ClockPowerEnabled;
+            SelectComboValue(this.thermalTestCombo, settings.ThermalTestMode);
             SetAlertTestButtonState(settings.AlertTestEnabled);
             LoadMetricLayout(settings);
         }
@@ -3766,9 +4433,11 @@ internal sealed class SettingsForm : Form
         settings.ClockUse24Hour = this.clockUse24HourCheck.Checked;
         settings.ClockCalendarEnabled = this.clockCalendarCheck.Checked;
         settings.ClockPowerEnabled = this.clockPowerCheck.Checked;
+        settings.ThermalTestMode = (ThermalTestMode)GetComboValue(this.thermalTestCombo, ThermalTestMode.Off);
         settings.VisibilityMode = (WidgetVisibilityMode)GetComboValue(this.visibilityCombo, WidgetVisibilityMode.DesktopOnly);
         settings.StartupEnabled = this.startupCheck.Checked;
         settings.PowerSavingEnabled = this.powerSavingCheck.Checked;
+        settings.HoverOpacityEnabled = this.hoverOpacityCheck.Checked;
         string[] selectedMetrics = ReadMetricSlots(false);
         settings.ShowCpu = ContainsMetricId(selectedMetrics, WidgetSettings.MetricCpu);
         settings.ShowMemory = ContainsMetricId(selectedMetrics, WidgetSettings.MetricMemory);
