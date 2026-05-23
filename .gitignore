@@ -1,0 +1,23 @@
+# Build outputs
+*.exe
+*.dll
+*.pdb
+*.obj
+bin/
+obj/
+out/
+
+# Logs and local runtime data
+*.log
+*.tmp
+
+# Visual Studio / editor state
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# OS metadata
+Thumbs.db
+Desktop.ini
