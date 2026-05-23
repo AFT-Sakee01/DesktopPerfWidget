@@ -7,9 +7,10 @@ The project is intentionally simple: one C# WinForms source file plus PowerShell
 ## Features
 
 - Bottom-right desktop widget with CPU, memory, disk, network, GPU, and NPU panels.
-- Per-core CPU activity bars, current/base CPU frequency, and readable hardware names.
+- Per-core CPU activity bars, current/base CPU frequency, memory manufacturer/speed, and readable hardware names.
 - GPU/NPU usage plus memory usage when Windows exposes matching performance counters.
 - Network upload/download graphs, connected Wi-Fi SSID when available, and disconnected state rendering.
+- Memory uses WMI physical-memory data for manufacturer and configured speed, plus live usage/capacity.
 - Disk read/write activity plus whole-disk capacity usage.
 - Warning backgrounds above 80% load and warning triangle after sustained critical load.
 - Notification-area icon with settings and exit actions.
@@ -90,12 +91,13 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DesktopPerfWidgetArm64
 
 - The app creates a notification-area icon. If Windows hides it, open the tray overflow with the small arrow.
 - Right-click the tray icon to open a small menu with `设置...` and `退出`. You can also right-click the widget and choose `设置...`.
-- Settings support width, height, bottom-left pixel position, black background transparency, visibility mode, autostart, power-saving mode, and the separate clock window.
+- Settings support width, height, bottom-left pixel position, background transparency, secondary transparency away from the desktop, visibility mode, autostart, power-saving mode, and the separate clock window.
 - The six metric panels are arranged with a drag-and-drop layout editor: drag a metric into slots 1-6 to show it in that order, or click the small `x` on a slot to hide it. Slots are shown as 3 rows by 2 columns, matching the widget's actual panel positions.
 - Settings include an alert-test toggle that forces every visible panel into the full warning state for visual checks.
 - Power-saving mode is enabled by default and applies process-level Windows EcoQoS power throttling with low process priority when supported.
 - Width, height, and position values are physical screen pixels. The settings UI labels them as window position X/Y and time position X/Y.
 - Width, height, and position can be adjusted with both numeric inputs and sliders.
+- Secondary transparency is applied to the full performance and clock windows only when the foreground window is not the desktop or taskbar.
 - In `一直可见` and `仅全屏不可见` modes, the widget lets mouse clicks pass through to windows behind it. `仅桌面可见` keeps normal widget right-click behavior.
 - The clock window uses Windows system time, updates to seconds, and has separate 24-hour mode, optional calendar display, optional battery power/charging rate display, transparency, size, and position settings.
 - Calendar mode left-aligns the time and right-aligns the date plus full weekday on the right.

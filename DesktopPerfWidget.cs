@@ -1009,7 +1009,7 @@ internal sealed class WidgetForm : Form
             {
                 g.Clear(Color.Transparent);
                 DrawWidget(g);
-                if (!NativeMethods.UpdateLayeredWindowFromBitmap(this.Handle, this.Location, bitmap))
+                if (!NativeMethods.UpdateLayeredWindowFromBitmap(this.Handle, this.Location, bitmap, GetApplicationOpacityAlpha()))
                 {
                     if (!this.layeredUpdateFailureLogged)
                     {
@@ -1068,12 +1068,13 @@ internal sealed class WidgetForm : Form
         if (string.Equals(metricId, WidgetSettings.MetricMemory, StringComparison.OrdinalIgnoreCase) && this.currentSettings.ShowMemory)
         {
             MetricPanel memoryPanel = new MetricPanel(
-                new string[] { "Memory", string.Format("MEM {0:0}%", this.snapshot.MemoryPercent), FormatGbPair(this.snapshot.MemoryUsedGb, this.snapshot.MemoryTotalGb) },
+                new string[] { FormatMemoryTitleForPanel(this.snapshot.MemoryManufacturer, this.snapshot.MemorySpeedMtps), string.Format("MEM {0:0}%", this.snapshot.MemoryPercent), FormatGbPair(this.snapshot.MemoryUsedGb, this.snapshot.MemoryTotalGb) },
                 new Color[] { Color.FromArgb(226, 126, 255) },
                 new List<double>[] { this.memoryHistory },
                 100.0,
                 false);
             memoryPanel.AlertPercent = this.snapshot.MemoryPercent;
+            memoryPanel.UseHardwareStackText = true;
             if (this.currentSettings.AlertTestEnabled)
             {
                 memoryPanel.AlertPercent = 100.0;
@@ -1285,6 +1286,17 @@ internal sealed class WidgetForm : Form
     {
         int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.BackgroundTransparencyPercent) / 100.0);
         return Math.Max(0, Math.Min(255, alpha));
+    }
+
+    private byte GetApplicationOpacityAlpha()
+    {
+        if (NativeMethods.IsForegroundDesktopOrShell(this.Handle))
+        {
+            return 255;
+        }
+
+        int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
+        return (byte)Math.Max(0, Math.Min(255, alpha));
     }
 
     private void DrawUsageAlertLayer(Graphics g, RectangleF rect, double alertPercent, bool alertIconVisible)
@@ -1562,6 +1574,13 @@ internal sealed class WidgetForm : Form
         }
 
         return string.Format("{0:0.00}GHz/{1:0.00}GHz", currentGhz, baseGhz);
+    }
+
+    private static string FormatMemoryTitleForPanel(string manufacturer, int speedMtps)
+    {
+        string first = string.IsNullOrWhiteSpace(manufacturer) ? "Memory" : CollapseWhitespace(manufacturer.Trim());
+        string second = speedMtps > 0 ? speedMtps.ToString() + " MT/s" : "-- MT/s";
+        return first + "\n" + second;
     }
 
     private static string FormatHardwareNameForPanel(string name)
@@ -2282,7 +2301,7 @@ internal sealed class ClockForm : Form
             {
                 g.Clear(Color.Transparent);
                 DrawClock(g);
-                if (!NativeMethods.UpdateLayeredWindowFromBitmap(this.Handle, this.Location, bitmap))
+                if (!NativeMethods.UpdateLayeredWindowFromBitmap(this.Handle, this.Location, bitmap, GetApplicationOpacityAlpha()))
                 {
                     if (!this.layeredUpdateFailureLogged)
                     {
@@ -2308,6 +2327,17 @@ internal sealed class ClockForm : Form
     {
         int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ClockTransparencyPercent) / 100.0);
         return Math.Max(0, Math.Min(255, alpha));
+    }
+
+    private byte GetApplicationOpacityAlpha()
+    {
+        if (NativeMethods.IsForegroundDesktopOrShell(this.Handle))
+        {
+            return 255;
+        }
+
+        int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
+        return (byte)Math.Max(0, Math.Min(255, alpha));
     }
 
     private int S(int value)
@@ -2393,6 +2423,7 @@ internal sealed class WidgetSettings
     public int LeftX { get; set; }
     public int BottomY { get; set; }
     public int BackgroundTransparencyPercent { get; set; }
+    public int ApplicationTransparencyPercent { get; set; }
     public int ClockWidth { get; set; }
     public int ClockHeight { get; set; }
     public int ClockLeftX { get; set; }
@@ -2426,6 +2457,7 @@ internal sealed class WidgetSettings
         this.LeftX = defaults.LeftX;
         this.BottomY = defaults.BottomY;
         this.BackgroundTransparencyPercent = DefaultBackgroundTransparency;
+        this.ApplicationTransparencyPercent = 0;
         this.ClockWidth = defaults.ClockWidth;
         this.ClockHeight = defaults.ClockHeight;
         this.ClockLeftX = defaults.ClockLeftX;
@@ -2463,6 +2495,7 @@ internal sealed class WidgetSettings
         settings.LeftX = workArea.Right - settings.Width - margin;
         settings.BottomY = workArea.Bottom - margin - 1;
         settings.BackgroundTransparencyPercent = DefaultBackgroundTransparency;
+        settings.ApplicationTransparencyPercent = 0;
         settings.ClockWidth = Clamp((int)Math.Round(192.0f * scale), MinClockWidth, MaxClockWidth);
         settings.ClockHeight = Clamp((int)Math.Round(58.0f * scale), MinClockHeight, MaxClockHeight);
         settings.ClockLeftX = workArea.Right - settings.ClockWidth - margin;
@@ -2495,6 +2528,7 @@ internal sealed class WidgetSettings
             LeftX = this.LeftX,
             BottomY = this.BottomY,
             BackgroundTransparencyPercent = this.BackgroundTransparencyPercent,
+            ApplicationTransparencyPercent = this.ApplicationTransparencyPercent,
             ClockWidth = this.ClockWidth,
             ClockHeight = this.ClockHeight,
             ClockLeftX = this.ClockLeftX,
@@ -2522,6 +2556,7 @@ internal sealed class WidgetSettings
         this.Width = Clamp(this.Width, MinWidth, MaxWidth);
         this.Height = Clamp(this.Height, MinHeight, MaxHeight);
         this.BackgroundTransparencyPercent = Clamp(this.BackgroundTransparencyPercent, MinBackgroundTransparency, MaxBackgroundTransparency);
+        this.ApplicationTransparencyPercent = Clamp(this.ApplicationTransparencyPercent, MinBackgroundTransparency, MaxBackgroundTransparency);
         this.ClockWidth = Clamp(this.ClockWidth, MinClockWidth, MaxClockWidth);
         this.ClockHeight = Clamp(this.ClockHeight, MinClockHeight, MaxClockHeight);
         this.ClockTransparencyPercent = Clamp(this.ClockTransparencyPercent, MinBackgroundTransparency, MaxBackgroundTransparency);
@@ -2600,6 +2635,7 @@ internal sealed class WidgetSettings
             "LeftX=" + this.LeftX,
             "BottomY=" + this.BottomY,
             "BackgroundTransparencyPercent=" + this.BackgroundTransparencyPercent,
+            "ApplicationTransparencyPercent=" + this.ApplicationTransparencyPercent,
             "ClockWidth=" + this.ClockWidth,
             "ClockHeight=" + this.ClockHeight,
             "ClockLeftX=" + this.ClockLeftX,
@@ -2657,6 +2693,12 @@ internal sealed class WidgetSettings
             int.TryParse(value, out intValue))
         {
             settings.BackgroundTransparencyPercent = intValue;
+            return;
+        }
+
+        if (string.Equals(key, "ApplicationTransparencyPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out intValue))
+        {
+            settings.ApplicationTransparencyPercent = intValue;
             return;
         }
 
@@ -2945,6 +2987,7 @@ internal sealed class SettingsForm : Form
     private NumericUpDown leftXBox;
     private NumericUpDown bottomYBox;
     private NumericUpDown backgroundTransparencyBox;
+    private NumericUpDown applicationTransparencyBox;
     private NumericUpDown clockWidthBox;
     private NumericUpDown clockHeightBox;
     private NumericUpDown clockLeftXBox;
@@ -2955,6 +2998,7 @@ internal sealed class SettingsForm : Form
     private TrackBar leftXSlider;
     private TrackBar bottomYSlider;
     private TrackBar backgroundTransparencySlider;
+    private TrackBar applicationTransparencySlider;
     private TrackBar clockWidthSlider;
     private TrackBar clockHeightSlider;
     private TrackBar clockLeftXSlider;
@@ -3017,11 +3061,12 @@ internal sealed class SettingsForm : Form
         root.Size = GetDesiredClientSize();
         root.Padding = new Padding(26, 20, 26, 20);
         root.BackColor = DarkTheme.Window;
-        root.ColumnCount = 3;
-        root.RowCount = 19;
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        root.ColumnCount = 4;
+        root.RowCount = 20;
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 360));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
@@ -3031,15 +3076,16 @@ internal sealed class SettingsForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 420));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         this.Controls.Add(root);
 
@@ -3049,6 +3095,8 @@ internal sealed class SettingsForm : Form
         this.bottomYBox = BuildNumberBox(Screen.PrimaryScreen.Bounds.Top, Screen.PrimaryScreen.Bounds.Bottom - 1);
         this.backgroundTransparencyBox = BuildNumberBox(WidgetSettings.MinBackgroundTransparency, WidgetSettings.MaxBackgroundTransparency);
         this.backgroundTransparencyBox.Increment = 1;
+        this.applicationTransparencyBox = BuildNumberBox(WidgetSettings.MinBackgroundTransparency, WidgetSettings.MaxBackgroundTransparency);
+        this.applicationTransparencyBox.Increment = 1;
         this.clockWidthBox = BuildNumberBox(WidgetSettings.MinClockWidth, WidgetSettings.MaxClockWidth);
         this.clockHeightBox = BuildNumberBox(WidgetSettings.MinClockHeight, WidgetSettings.MaxClockHeight);
         this.clockLeftXBox = BuildNumberBox(Screen.PrimaryScreen.Bounds.Left, Screen.PrimaryScreen.Bounds.Right - 1);
@@ -3060,6 +3108,7 @@ internal sealed class SettingsForm : Form
         this.leftXSlider = BuildSlider(Screen.PrimaryScreen.Bounds.Left, Screen.PrimaryScreen.Bounds.Right - 1);
         this.bottomYSlider = BuildSlider(Screen.PrimaryScreen.Bounds.Top, Screen.PrimaryScreen.Bounds.Bottom - 1);
         this.backgroundTransparencySlider = BuildSlider(WidgetSettings.MinBackgroundTransparency, WidgetSettings.MaxBackgroundTransparency);
+        this.applicationTransparencySlider = BuildSlider(WidgetSettings.MinBackgroundTransparency, WidgetSettings.MaxBackgroundTransparency);
         this.clockWidthSlider = BuildSlider(WidgetSettings.MinClockWidth, WidgetSettings.MaxClockWidth);
         this.clockHeightSlider = BuildSlider(WidgetSettings.MinClockHeight, WidgetSettings.MaxClockHeight);
         this.clockLeftXSlider = BuildSlider(Screen.PrimaryScreen.Bounds.Left, Screen.PrimaryScreen.Bounds.Right - 1);
@@ -3122,14 +3171,14 @@ internal sealed class SettingsForm : Form
         title.BackColor = DarkTheme.Window;
         title.Dock = DockStyle.Fill;
         title.TextAlign = ContentAlignment.MiddleLeft;
-        root.SetColumnSpan(title, 3);
+        root.SetColumnSpan(title, 4);
         root.Controls.Add(title, 0, 0);
 
         AddSliderRow(root, 1, "窗口宽度", this.widthBox, this.widthSlider);
         AddSliderRow(root, 2, "窗口高度", this.heightBox, this.heightSlider);
         AddSliderRow(root, 3, "位置 X", this.leftXBox, this.leftXSlider);
         AddSliderRow(root, 4, "位置 Y", this.bottomYBox, this.bottomYSlider);
-        AddSliderRow(root, 5, "黑色背景透明度", this.backgroundTransparencyBox, this.backgroundTransparencySlider);
+        AddSliderRow(root, 5, "透明度", this.backgroundTransparencyBox, this.backgroundTransparencySlider);
         AddEditorRow(root, 6, "可见性", this.visibilityCombo);
         AddLabel(root, 7, "告警测试");
         Control alertEditor = BuildButtonEditor(this.alertTestButton);
@@ -3150,10 +3199,9 @@ internal sealed class SettingsForm : Form
         root.SetColumnSpan(runtimeOptions, 2);
         root.Controls.Add(runtimeOptions, 1, 8);
 
-        Control metricLayoutEditor = BuildMetricLayoutEditor();
-        AddLabel(root, 9, "栏目布局");
-        root.SetColumnSpan(metricLayoutEditor, 2);
-        root.Controls.Add(metricLayoutEditor, 1, 9);
+        Control metricLayoutEditor = BuildMetricLayoutSidePanel();
+        root.SetRowSpan(metricLayoutEditor, 18);
+        root.Controls.Add(metricLayoutEditor, 3, 1);
 
         FlowLayoutPanel clockOptions = new FlowLayoutPanel();
         clockOptions.Dock = DockStyle.Fill;
@@ -3162,14 +3210,14 @@ internal sealed class SettingsForm : Form
         clockOptions.BackColor = DarkTheme.Window;
         clockOptions.Padding = new Padding(0, 10, 0, 0);
         clockOptions.Controls.Add(this.clockUse24HourCheck);
-        AddLabel(root, 10, "时间窗口");
+        AddLabel(root, 9, "时间窗口");
         root.SetColumnSpan(clockOptions, 2);
-        root.Controls.Add(clockOptions, 1, 10);
-        AddSliderRow(root, 11, "时间宽度", this.clockWidthBox, this.clockWidthSlider);
-        AddSliderRow(root, 12, "时间高度", this.clockHeightBox, this.clockHeightSlider);
-        AddSliderRow(root, 13, "位置 X", this.clockLeftXBox, this.clockLeftXSlider);
-        AddSliderRow(root, 14, "位置 Y", this.clockBottomYBox, this.clockBottomYSlider);
-        AddSliderRow(root, 15, "时间透明度", this.clockTransparencyBox, this.clockTransparencySlider);
+        root.Controls.Add(clockOptions, 1, 9);
+        AddSliderRow(root, 10, "时间宽度", this.clockWidthBox, this.clockWidthSlider);
+        AddSliderRow(root, 11, "时间高度", this.clockHeightBox, this.clockHeightSlider);
+        AddSliderRow(root, 12, "位置 X", this.clockLeftXBox, this.clockLeftXSlider);
+        AddSliderRow(root, 13, "位置 Y", this.clockBottomYBox, this.clockBottomYSlider);
+        AddSliderRow(root, 14, "透明度", this.clockTransparencyBox, this.clockTransparencySlider);
         FlowLayoutPanel calendarOptions = new FlowLayoutPanel();
         calendarOptions.Dock = DockStyle.Fill;
         calendarOptions.FlowDirection = FlowDirection.LeftToRight;
@@ -3180,9 +3228,10 @@ internal sealed class SettingsForm : Form
         this.clockPowerCheck.Margin = new Padding(0, 0, 0, 0);
         calendarOptions.Controls.Add(this.clockCalendarCheck);
         calendarOptions.Controls.Add(this.clockPowerCheck);
-        AddLabel(root, 16, "时间信息");
+        AddLabel(root, 15, "时间信息");
         root.SetColumnSpan(calendarOptions, 2);
-        root.Controls.Add(calendarOptions, 1, 16);
+        root.Controls.Add(calendarOptions, 1, 15);
+        AddSliderRow(root, 18, "副透明度", this.applicationTransparencyBox, this.applicationTransparencySlider);
 
         Button saveButton = new Button();
         saveButton.Text = "保存";
@@ -3226,8 +3275,8 @@ internal sealed class SettingsForm : Form
         buttons.Controls.Add(saveButton);
         buttons.Controls.Add(cancelButton);
         buttons.Controls.Add(resetButton);
-        root.SetColumnSpan(buttons, 3);
-        root.Controls.Add(buttons, 0, 18);
+        root.SetColumnSpan(buttons, 4);
+        root.Controls.Add(buttons, 0, 19);
 
         this.visibilityCombo.Items.Add(new ComboOption("仅桌面可见", WidgetVisibilityMode.DesktopOnly));
         this.visibilityCombo.Items.Add(new ComboOption("一直可见", WidgetVisibilityMode.AlwaysVisible));
@@ -3238,6 +3287,7 @@ internal sealed class SettingsForm : Form
         WirePair(this.leftXBox, this.leftXSlider);
         WirePair(this.bottomYBox, this.bottomYSlider);
         WirePair(this.backgroundTransparencyBox, this.backgroundTransparencySlider);
+        WirePair(this.applicationTransparencyBox, this.applicationTransparencySlider);
         WirePair(this.clockWidthBox, this.clockWidthSlider);
         WirePair(this.clockHeightBox, this.clockHeightSlider);
         WirePair(this.clockLeftXBox, this.clockLeftXSlider);
@@ -3247,7 +3297,7 @@ internal sealed class SettingsForm : Form
 
     private static Size GetDesiredClientSize()
     {
-        return new Size(1080, 1540);
+        return new Size(1160, 1200);
     }
 
     private static Size FitClientSizeToScreen(Size desiredSize)
@@ -3302,6 +3352,32 @@ internal sealed class SettingsForm : Form
         combo.ForeColor = DarkTheme.Text;
         combo.SelectedIndexChanged += OnSettingChanged;
         return combo;
+    }
+
+    private Control BuildMetricLayoutSidePanel()
+    {
+        TableLayoutPanel panel = new TableLayoutPanel();
+        panel.Dock = DockStyle.Fill;
+        panel.BackColor = DarkTheme.Window;
+        panel.ColumnCount = 1;
+        panel.RowCount = 2;
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.Padding = new Padding(12, 0, 0, 0);
+
+        Label label = new Label();
+        label.Text = "栏目排序";
+        label.Dock = DockStyle.Fill;
+        label.TextAlign = ContentAlignment.MiddleLeft;
+        label.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
+        label.UseCompatibleTextRendering = true;
+        label.ForeColor = DarkTheme.SubtleText;
+        label.BackColor = DarkTheme.Window;
+
+        Control editor = BuildMetricLayoutEditor();
+        panel.Controls.Add(label, 0, 0);
+        panel.Controls.Add(editor, 0, 1);
+        return panel;
     }
 
     private Control BuildMetricLayoutEditor()
@@ -3565,6 +3641,8 @@ internal sealed class SettingsForm : Form
             this.clockBottomYSlider.Value = settings.ClockBottomY;
             this.backgroundTransparencyBox.Value = settings.BackgroundTransparencyPercent;
             this.backgroundTransparencySlider.Value = settings.BackgroundTransparencyPercent;
+            this.applicationTransparencyBox.Value = settings.ApplicationTransparencyPercent;
+            this.applicationTransparencySlider.Value = settings.ApplicationTransparencyPercent;
             this.clockTransparencyBox.Value = settings.ClockTransparencyPercent;
             this.clockTransparencySlider.Value = settings.ClockTransparencyPercent;
             SelectComboValue(this.visibilityCombo, settings.VisibilityMode);
@@ -3679,6 +3757,7 @@ internal sealed class SettingsForm : Form
         settings.LeftX = (int)this.leftXBox.Value;
         settings.BottomY = (int)this.bottomYBox.Value;
         settings.BackgroundTransparencyPercent = (int)this.backgroundTransparencyBox.Value;
+        settings.ApplicationTransparencyPercent = (int)this.applicationTransparencyBox.Value;
         settings.ClockWidth = (int)this.clockWidthBox.Value;
         settings.ClockHeight = (int)this.clockHeightBox.Value;
         settings.ClockLeftX = (int)this.clockLeftXBox.Value;
@@ -4065,6 +4144,7 @@ internal sealed class PdhSampler : IDisposable
     private readonly int cpuCoreCount;
     private readonly double cpuBaseFrequencyGhz;
     private readonly double cpuCurrentFrequencyFallbackGhz;
+    private readonly MemoryInfo memoryInfo;
     private readonly string gpuName;
     private readonly double gpuMemoryTotalGb;
     private readonly string npuName;
@@ -4100,6 +4180,8 @@ internal sealed class PdhSampler : IDisposable
         {
             this.cpuCoreCount = this.cpuCoreCounters.Count;
         }
+
+        this.memoryInfo = DetectMemoryInfo();
 
         this.diskInfo = DetectDiskInfo();
         this.diskCounter = AddFirstAvailable(new string[]
@@ -4163,6 +4245,10 @@ internal sealed class PdhSampler : IDisposable
             this.npuDedicatedMemoryCounters.Count,
             this.npuSharedMemoryCounters.Count,
             JoinSet(this.npuLuidTokens)));
+        Program.LogInfo(string.Format(
+            "Memory hardware initialized. Manufacturer={0}, Speed={1}MT/s",
+            this.memoryInfo.Manufacturer,
+            this.memoryInfo.SpeedMtps));
     }
 
     public PerfSnapshot Sample()
@@ -4177,6 +4263,8 @@ internal sealed class PdhSampler : IDisposable
         snapshot.CpuCorePercents = ReadCpuCorePercents();
         snapshot.CpuFrequencyGhz = ReadCpuFrequencyGhz();
         snapshot.CpuBaseFrequencyGhz = this.cpuBaseFrequencyGhz;
+        snapshot.MemoryManufacturer = this.memoryInfo.Manufacturer;
+        snapshot.MemorySpeedMtps = this.memoryInfo.SpeedMtps;
         snapshot.DiskPercent = Clamp(ReadCounter(this.diskCounter), 0.0, 100.0);
         NetworkState networkState = DetectNetworkState();
         snapshot.NetworkName = networkState.Name;
@@ -4666,6 +4754,128 @@ internal sealed class PdhSampler : IDisposable
         }
 
         return info;
+    }
+
+    private static MemoryInfo DetectMemoryInfo()
+    {
+        MemoryInfo info = new MemoryInfo();
+        info.Manufacturer = "Memory";
+        info.SpeedMtps = 0;
+
+        try
+        {
+            using (ManagementObjectSearcher searcher = new ManagementObjectSearcher("SELECT Manufacturer, Speed, ConfiguredClockSpeed FROM Win32_PhysicalMemory"))
+            using (ManagementObjectCollection collection = searcher.Get())
+            {
+                List<string> manufacturers = new List<string>();
+                foreach (ManagementObject item in collection)
+                {
+                    string manufacturer = NormalizeMemoryManufacturer(Convert.ToString(item["Manufacturer"]));
+                    if (manufacturer.Length > 0 && !ContainsText(manufacturers, manufacturer))
+                    {
+                        manufacturers.Add(manufacturer);
+                    }
+
+                    int configuredSpeed = ToPositiveInt(item["ConfiguredClockSpeed"]);
+                    int speed = configuredSpeed > 0 ? configuredSpeed : ToPositiveInt(item["Speed"]);
+                    if (speed > info.SpeedMtps)
+                    {
+                        info.SpeedMtps = speed;
+                    }
+                }
+
+                if (manufacturers.Count == 1)
+                {
+                    info.Manufacturer = manufacturers[0];
+                }
+                else if (manufacturers.Count > 1)
+                {
+                    info.Manufacturer = string.Join("/", manufacturers.ToArray());
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Program.LogException(ex);
+        }
+
+        return info;
+    }
+
+    private static string NormalizeMemoryManufacturer(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        string text = CollapseWhitespace(value.Trim());
+        if (text.Length == 0 ||
+            string.Equals(text, "Unknown", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(text, "Undefined", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(text, "Not Specified", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(text, "To Be Filled By O.E.M.", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return text;
+    }
+
+    private static string CollapseWhitespace(string value)
+    {
+        StringBuilder builder = new StringBuilder(value.Length);
+        bool previousWhitespace = false;
+        for (int i = 0; i < value.Length; i++)
+        {
+            char ch = value[i];
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!previousWhitespace)
+                {
+                    builder.Append(' ');
+                    previousWhitespace = true;
+                }
+
+                continue;
+            }
+
+            builder.Append(ch);
+            previousWhitespace = false;
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool ContainsText(List<string> values, string text)
+    {
+        for (int i = 0; i < values.Count; i++)
+        {
+            if (string.Equals(values[i], text, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int ToPositiveInt(object value)
+    {
+        if (value == null)
+        {
+            return 0;
+        }
+
+        try
+        {
+            int number = Convert.ToInt32(value);
+            return number > 0 ? number : 0;
+        }
+        catch
+        {
+            return 0;
+        }
     }
 
     private static DiskInfo DetectDiskInfo()
@@ -5317,6 +5527,12 @@ internal sealed class CpuInfo
     public double BaseFrequencyGhz { get; set; }
 }
 
+internal sealed class MemoryInfo
+{
+    public string Manufacturer { get; set; }
+    public int SpeedMtps { get; set; }
+}
+
 internal sealed class DiskInfo
 {
     public string Name { get; set; }
@@ -5336,6 +5552,8 @@ internal sealed class PerfSnapshot
     public double MemoryUsedGb { get; set; }
     public double MemoryTotalGb { get; set; }
     public double MemoryPercent { get; set; }
+    public string MemoryManufacturer { get; set; }
+    public int MemorySpeedMtps { get; set; }
     public string DiskName { get; set; }
     public double DiskPercent { get; set; }
     public double DiskCapacityPercent { get; set; }
@@ -5360,6 +5578,7 @@ internal sealed class PerfSnapshot
     {
         this.CpuName = "CPU";
         this.CpuCorePercents = new double[0];
+        this.MemoryManufacturer = "Memory";
         this.DiskName = "Physical Disk";
         this.NetworkName = "Network";
         this.NetworkConnected = true;
@@ -5890,6 +6109,11 @@ internal static class NativeMethods
 
     public static bool UpdateLayeredWindowFromBitmap(IntPtr handle, Point location, Bitmap bitmap)
     {
+        return UpdateLayeredWindowFromBitmap(handle, location, bitmap, 255);
+    }
+
+    public static bool UpdateLayeredWindowFromBitmap(IntPtr handle, Point location, Bitmap bitmap, byte sourceAlpha)
+    {
         IntPtr screenDc = IntPtr.Zero;
         IntPtr memoryDc = IntPtr.Zero;
         IntPtr bitmapHandle = IntPtr.Zero;
@@ -5918,7 +6142,7 @@ internal static class NativeMethods
             BLENDFUNCTION blend = new BLENDFUNCTION();
             blend.BlendOp = AC_SRC_OVER;
             blend.BlendFlags = 0;
-            blend.SourceConstantAlpha = 255;
+            blend.SourceConstantAlpha = sourceAlpha;
             blend.AlphaFormat = AC_SRC_ALPHA;
 
             return UpdateLayeredWindow(
@@ -6116,6 +6340,20 @@ internal static class NativeMethods
                rect.Top <= bounds.Top + Tolerance &&
                rect.Right >= bounds.Right - Tolerance &&
                rect.Bottom >= bounds.Bottom - Tolerance;
+    }
+
+    public static bool IsForegroundDesktopOrShell(IntPtr ownHandle)
+    {
+        IntPtr foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero || foreground == ownHandle)
+        {
+            return true;
+        }
+
+        string className = GetWindowClassName(foreground);
+        return string.Equals(className, "Progman", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(className, "WorkerW", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(className, "Shell_TrayWnd", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string GetWindowClassName(IntPtr handle)
