@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Management;
 using System.Net.NetworkInformation;
@@ -331,6 +332,40 @@ internal static class Program
     internal static void LogException(Exception ex)
     {
         Logger.Error(ex);
+    }
+}
+
+internal static class DrawingUtil
+{
+    public static void DrawImageWithAlpha(Graphics target, Bitmap image, int alpha)
+    {
+        alpha = Math.Max(0, Math.Min(255, alpha));
+        if (alpha <= 0)
+        {
+            return;
+        }
+
+        if (alpha >= 255)
+        {
+            target.DrawImageUnscaled(image, 0, 0);
+            return;
+        }
+
+        using (ImageAttributes attributes = new ImageAttributes())
+        {
+            ColorMatrix matrix = new ColorMatrix();
+            matrix.Matrix33 = alpha / 255.0f;
+            attributes.SetColorMatrix(matrix, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+            target.DrawImage(
+                image,
+                new Rectangle(0, 0, image.Width, image.Height),
+                0,
+                0,
+                image.Width,
+                image.Height,
+                GraphicsUnit.Pixel,
+                attributes);
+        }
     }
 }
 
@@ -1016,16 +1051,58 @@ internal sealed class WidgetForm : Form
 
     private void DrawWidget(Graphics g)
     {
+        DrawWidgetBackground(g);
+        DrawWidgetContentLayer(g);
+    }
+
+    private void ConfigureWidgetGraphics(Graphics g)
+    {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+    }
 
+    private void DrawWidgetBackground(Graphics g)
+    {
+        ConfigureWidgetGraphics(g);
         int backgroundAlpha = GetBackgroundOpacityAlpha();
 
         using (GraphicsPath shell = RoundedRectangle(new RectangleF(0, 0, this.Width - 1, this.Height - 1), S(13)))
         using (SolidBrush background = new SolidBrush(Color.FromArgb(backgroundAlpha, 18, 19, 22)))
-        using (Pen outline = new Pen(Color.FromArgb(90, 255, 255, 255), Math.Max(1, S(1))))
         {
             g.FillPath(background, shell);
+        }
+    }
+
+    private void DrawWidgetContentLayer(Graphics g)
+    {
+        int contentAlpha = GetContentOpacityAlpha();
+        if (contentAlpha <= 0)
+        {
+            return;
+        }
+
+        if (contentAlpha >= 255)
+        {
+            DrawWidgetContent(g);
+            return;
+        }
+
+        using (Bitmap contentBitmap = new Bitmap(this.Width, this.Height, PixelFormat.Format32bppPArgb))
+        using (Graphics contentGraphics = Graphics.FromImage(contentBitmap))
+        {
+            contentGraphics.Clear(Color.Transparent);
+            DrawWidgetContent(contentGraphics);
+            DrawingUtil.DrawImageWithAlpha(g, contentBitmap, contentAlpha);
+        }
+    }
+
+    private void DrawWidgetContent(Graphics g)
+    {
+        ConfigureWidgetGraphics(g);
+
+        using (GraphicsPath shell = RoundedRectangle(new RectangleF(0, 0, this.Width - 1, this.Height - 1), S(13)))
+        using (Pen outline = new Pen(Color.FromArgb(90, 255, 255, 255), Math.Max(1, S(1))))
+        {
             g.DrawPath(outline, shell);
         }
 
@@ -1078,7 +1155,8 @@ internal sealed class WidgetForm : Form
             using (Graphics g = Graphics.FromImage(bitmap))
             {
                 g.Clear(Color.Transparent);
-                DrawWidget(g);
+                DrawWidgetBackground(g);
+                DrawWidgetContentLayer(g);
                 if (!NativeMethods.UpdateLayeredWindowFromBitmap(this.Handle, this.Location, bitmap, GetApplicationOpacityAlpha()))
                 {
                     if (!this.layeredUpdateFailureLogged)
@@ -1358,19 +1436,15 @@ internal sealed class WidgetForm : Form
         return Math.Max(0, Math.Min(255, alpha));
     }
 
+    private int GetContentOpacityAlpha()
+    {
+        int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
+        return Math.Max(0, Math.Min(255, alpha));
+    }
+
     private byte GetApplicationOpacityAlpha()
     {
-        int alpha;
-        if (NativeMethods.IsForegroundDesktopOrShell(this.Handle))
-        {
-            alpha = 255;
-        }
-        else
-        {
-            alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
-        }
-
-        return (byte)ApplyHoverTransparencyTarget(Math.Max(0, Math.Min(255, alpha)));
+        return (byte)ApplyHoverTransparencyTarget(255);
     }
 
     private int ApplyHoverTransparencyTarget(int alpha)
@@ -2158,15 +2232,58 @@ internal sealed class ClockForm : Form
 
     private void DrawClock(Graphics g)
     {
+        DrawClockBackground(g);
+        DrawClockContentLayer(g);
+    }
+
+    private void ConfigureClockGraphics(Graphics g)
+    {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+    }
 
-        int alpha = GetClockOpacityAlpha();
+    private void DrawClockBackground(Graphics g)
+    {
+        ConfigureClockGraphics(g);
+
+        int alpha = GetBackgroundOpacityAlpha();
         using (GraphicsPath shell = RoundedRectangle(new RectangleF(0, 0, this.Width - 1, this.Height - 1), S(12)))
         using (SolidBrush background = new SolidBrush(Color.FromArgb(alpha, 18, 19, 22)))
-        using (Pen outline = new Pen(Color.FromArgb(90, 255, 255, 255), Math.Max(1, S(1))))
         {
             g.FillPath(background, shell);
+        }
+    }
+
+    private void DrawClockContentLayer(Graphics g)
+    {
+        int contentAlpha = GetContentOpacityAlpha();
+        if (contentAlpha <= 0)
+        {
+            return;
+        }
+
+        if (contentAlpha >= 255)
+        {
+            DrawClockContent(g);
+            return;
+        }
+
+        using (Bitmap contentBitmap = new Bitmap(this.Width, this.Height, PixelFormat.Format32bppPArgb))
+        using (Graphics contentGraphics = Graphics.FromImage(contentBitmap))
+        {
+            contentGraphics.Clear(Color.Transparent);
+            DrawClockContent(contentGraphics);
+            DrawingUtil.DrawImageWithAlpha(g, contentBitmap, contentAlpha);
+        }
+    }
+
+    private void DrawClockContent(Graphics g)
+    {
+        ConfigureClockGraphics(g);
+
+        using (GraphicsPath shell = RoundedRectangle(new RectangleF(0, 0, this.Width - 1, this.Height - 1), S(12)))
+        using (Pen outline = new Pen(Color.FromArgb(90, 255, 255, 255), Math.Max(1, S(1))))
+        {
             g.DrawPath(outline, shell);
         }
 
@@ -2892,7 +3009,8 @@ internal sealed class ClockForm : Form
             using (Graphics g = Graphics.FromImage(bitmap))
             {
                 g.Clear(Color.Transparent);
-                DrawClock(g);
+                DrawClockBackground(g);
+                DrawClockContentLayer(g);
                 if (!NativeMethods.UpdateLayeredWindowFromBitmap(this.Handle, this.Location, bitmap, GetApplicationOpacityAlpha()))
                 {
                     if (!this.layeredUpdateFailureLogged)
@@ -2915,25 +3033,21 @@ internal sealed class ClockForm : Form
         }
     }
 
-    private int GetClockOpacityAlpha()
+    private int GetBackgroundOpacityAlpha()
     {
-        int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ClockTransparencyPercent) / 100.0);
+        int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.BackgroundTransparencyPercent) / 100.0);
+        return Math.Max(0, Math.Min(255, alpha));
+    }
+
+    private int GetContentOpacityAlpha()
+    {
+        int alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
         return Math.Max(0, Math.Min(255, alpha));
     }
 
     private byte GetApplicationOpacityAlpha()
     {
-        int alpha;
-        if (NativeMethods.IsForegroundDesktopOrShell(this.Handle))
-        {
-            alpha = 255;
-        }
-        else
-        {
-            alpha = (int)Math.Round(255.0 * (100 - this.currentSettings.ApplicationTransparencyPercent) / 100.0);
-        }
-
-        return (byte)ApplyHoverTransparencyTarget(Math.Max(0, Math.Min(255, alpha)));
+        return (byte)ApplyHoverTransparencyTarget(255);
     }
 
     private int ApplyHoverTransparencyTarget(int alpha)
@@ -3263,12 +3377,12 @@ internal sealed class WidgetSettings
             "LeftX=" + this.LeftX,
             "BottomY=" + this.BottomY,
             "BackgroundTransparencyPercent=" + this.BackgroundTransparencyPercent,
+            "ContentTransparencyPercent=" + this.ApplicationTransparencyPercent,
             "ApplicationTransparencyPercent=" + this.ApplicationTransparencyPercent,
             "ClockWidth=" + this.ClockWidth,
             "ClockHeight=" + this.ClockHeight,
             "ClockLeftX=" + this.ClockLeftX,
             "ClockBottomY=" + this.ClockBottomY,
-            "ClockTransparencyPercent=" + this.ClockTransparencyPercent,
             "ClockUse24Hour=" + this.ClockUse24Hour,
             "ClockCalendarEnabled=" + this.ClockCalendarEnabled,
             "ClockPowerEnabled=" + this.ClockPowerEnabled,
@@ -3326,7 +3440,9 @@ internal sealed class WidgetSettings
             return;
         }
 
-        if (string.Equals(key, "ApplicationTransparencyPercent", StringComparison.OrdinalIgnoreCase) && int.TryParse(value, out intValue))
+        if ((string.Equals(key, "ApplicationTransparencyPercent", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(key, "ContentTransparencyPercent", StringComparison.OrdinalIgnoreCase)) &&
+            int.TryParse(value, out intValue))
         {
             settings.ApplicationTransparencyPercent = intValue;
             return;
@@ -3837,12 +3953,13 @@ internal sealed class SettingsForm : Form
         AddSliderRow(root, 2, "窗口高度", this.heightBox, this.heightSlider);
         AddSliderRow(root, 3, "位置 X", this.leftXBox, this.leftXSlider);
         AddSliderRow(root, 4, "位置 Y", this.bottomYBox, this.bottomYSlider);
-        AddSliderRow(root, 5, "透明度", this.backgroundTransparencyBox, this.backgroundTransparencySlider);
-        AddEditorRow(root, 6, "可见性", this.visibilityCombo);
-        AddLabel(root, 7, "告警测试");
+        AddSliderRow(root, 5, "黑色背景透明度", this.backgroundTransparencyBox, this.backgroundTransparencySlider);
+        AddSliderRow(root, 6, "内容透明度", this.applicationTransparencyBox, this.applicationTransparencySlider);
+        AddEditorRow(root, 7, "可见性", this.visibilityCombo);
+        AddLabel(root, 8, "告警测试");
         Control alertEditor = BuildButtonEditor(this.alertTestButton);
         root.SetColumnSpan(alertEditor, 2);
-        root.Controls.Add(alertEditor, 1, 7);
+        root.Controls.Add(alertEditor, 1, 8);
         AddEditorRow(root, 16, "温度测试", this.thermalTestCombo);
 
         FlowLayoutPanel runtimeOptions = new FlowLayoutPanel();
@@ -3857,9 +3974,9 @@ internal sealed class SettingsForm : Form
         runtimeOptions.Controls.Add(this.startupCheck);
         runtimeOptions.Controls.Add(this.powerSavingCheck);
         runtimeOptions.Controls.Add(this.hoverOpacityCheck);
-        AddLabel(root, 8, "运行选项");
+        AddLabel(root, 9, "运行选项");
         root.SetColumnSpan(runtimeOptions, 2);
-        root.Controls.Add(runtimeOptions, 1, 8);
+        root.Controls.Add(runtimeOptions, 1, 9);
 
         Control metricLayoutEditor = BuildMetricLayoutSidePanel();
         root.SetRowSpan(metricLayoutEditor, 18);
@@ -3872,14 +3989,13 @@ internal sealed class SettingsForm : Form
         clockOptions.BackColor = DarkTheme.Window;
         clockOptions.Padding = new Padding(0, 10, 0, 0);
         clockOptions.Controls.Add(this.clockUse24HourCheck);
-        AddLabel(root, 9, "时间窗口");
+        AddLabel(root, 10, "时间窗口");
         root.SetColumnSpan(clockOptions, 2);
-        root.Controls.Add(clockOptions, 1, 9);
-        AddSliderRow(root, 10, "时间宽度", this.clockWidthBox, this.clockWidthSlider);
-        AddSliderRow(root, 11, "时间高度", this.clockHeightBox, this.clockHeightSlider);
-        AddSliderRow(root, 12, "位置 X", this.clockLeftXBox, this.clockLeftXSlider);
-        AddSliderRow(root, 13, "位置 Y", this.clockBottomYBox, this.clockBottomYSlider);
-        AddSliderRow(root, 14, "透明度", this.clockTransparencyBox, this.clockTransparencySlider);
+        root.Controls.Add(clockOptions, 1, 10);
+        AddSliderRow(root, 11, "时间宽度", this.clockWidthBox, this.clockWidthSlider);
+        AddSliderRow(root, 12, "时间高度", this.clockHeightBox, this.clockHeightSlider);
+        AddSliderRow(root, 13, "位置 X", this.clockLeftXBox, this.clockLeftXSlider);
+        AddSliderRow(root, 14, "位置 Y", this.clockBottomYBox, this.clockBottomYSlider);
         FlowLayoutPanel calendarOptions = new FlowLayoutPanel();
         calendarOptions.Dock = DockStyle.Fill;
         calendarOptions.FlowDirection = FlowDirection.LeftToRight;
@@ -3893,7 +4009,6 @@ internal sealed class SettingsForm : Form
         AddLabel(root, 15, "时间信息");
         root.SetColumnSpan(calendarOptions, 2);
         root.Controls.Add(calendarOptions, 1, 15);
-        AddSliderRow(root, 18, "副透明度", this.applicationTransparencyBox, this.applicationTransparencySlider);
 
         Button saveButton = new Button();
         saveButton.Text = "保存";
@@ -4308,8 +4423,8 @@ internal sealed class SettingsForm : Form
             this.backgroundTransparencySlider.Value = settings.BackgroundTransparencyPercent;
             this.applicationTransparencyBox.Value = settings.ApplicationTransparencyPercent;
             this.applicationTransparencySlider.Value = settings.ApplicationTransparencyPercent;
-            this.clockTransparencyBox.Value = settings.ClockTransparencyPercent;
-            this.clockTransparencySlider.Value = settings.ClockTransparencyPercent;
+            this.clockTransparencyBox.Value = settings.BackgroundTransparencyPercent;
+            this.clockTransparencySlider.Value = settings.BackgroundTransparencyPercent;
             SelectComboValue(this.visibilityCombo, settings.VisibilityMode);
             this.startupCheck.Checked = settings.StartupEnabled;
             this.powerSavingCheck.Checked = settings.PowerSavingEnabled;
@@ -4429,7 +4544,7 @@ internal sealed class SettingsForm : Form
         settings.ClockHeight = (int)this.clockHeightBox.Value;
         settings.ClockLeftX = (int)this.clockLeftXBox.Value;
         settings.ClockBottomY = (int)this.clockBottomYBox.Value;
-        settings.ClockTransparencyPercent = (int)this.clockTransparencyBox.Value;
+        settings.ClockTransparencyPercent = settings.BackgroundTransparencyPercent;
         settings.ClockUse24Hour = this.clockUse24HourCheck.Checked;
         settings.ClockCalendarEnabled = this.clockCalendarCheck.Checked;
         settings.ClockPowerEnabled = this.clockPowerCheck.Checked;
