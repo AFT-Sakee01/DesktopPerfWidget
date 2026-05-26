@@ -16,6 +16,7 @@ The project is intentionally simple: one C# WinForms source file plus PowerShell
 - Notification-area icon with settings and exit actions.
 - Drag-and-drop metric layout editor for the six visible panel slots.
 - Optional clock window with 24-hour mode, calendar text, and battery/charging display.
+- Optional macOS/Seelen-style Dock launcher with pinned apps, running app indicators, instance counts, hover magnification, and media controls.
 - Clock window thermal alert strip for ACPI thermal zones above 70°C, with critical warning after sustained 95°C.
 - Power-saving mode using Windows EcoQoS power throttling when available and lower process priority.
 - Stable visible desktop mode by default, plus an experimental WorkerW desktop-parent mode.
@@ -104,6 +105,8 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DesktopPerfWidgetArm64
 - The clock window uses Windows system time, updates to seconds, and has separate 24-hour mode, optional calendar display, optional battery power/charging rate display, transparency, size, and position settings.
 - Calendar mode left-aligns the time and right-aligns the date plus full weekday on the right.
 - Power display uses pale red for battery power and pale green for charging when Windows exposes the battery rate.
+- The Dock can be enabled from settings. Dock items use one line per launcher in `名称|命令` format, for example `资源管理器|%WINDIR%\explorer.exe` or `设置|ms-settings:`. The left edge has fixed show-desktop and Start-menu buttons, pinned items stay after them, currently running apps appear on the right, and the media item shows the active Windows media session app/title when available while accepting previous/play-next clicks.
+- The Dock quota widget reads Codex quota events from `%USERPROFILE%\.codex\sessions\**\rollout-*.jsonl`, using `rate_limits.primary` for the 5-hour window and `rate_limits.secondary` for the weekly window. If no Codex session data is available, it falls back to optional `%LOCALAPPDATA%\DesktopPerfWidget\quota.ini` values: `FiveHourPercent`, `FiveHourReset`, `WeeklyPercent`, and `WeeklyReset`.
 - `重置` restores the current default size and bottom-right position.
 - Changes preview immediately. Closing the settings window or pressing `Cancel` restores the previous saved state. Press `保存` to persist settings.
 
