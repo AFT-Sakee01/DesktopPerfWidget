@@ -4,15 +4,16 @@
 
 DesktopPerfWidget was developed into a compact Windows on ARM desktop performance overlay. The current version focuses on reliability first: a stable visible desktop window is the default, WorkerW desktop parenting remains available only as an experimental mode, and the app includes settings, logging, autostart, a tray menu, alert rendering, and a separate clock window.
 
-The project is distributed as a small source package. The core application is `DesktopPerfWidget.cs`; build and lifecycle tasks are handled by PowerShell and CMD wrappers.
+The project is distributed as a small source package. `DesktopPerfWidget.cs` contains the entry point, with feature code split into `Core/`, `Performance/`, `Dock/`, `Launchpad/`, `Settings/`, and `Interop/`. Build and lifecycle tasks are handled by PowerShell and CMD wrappers.
 
 ## Runtime Architecture
 
 `Program` is the entry point. It handles command-line lifecycle operations before starting the WinForms message loop:
 
 - `--stop` signals the named stop event.
-- `--install` writes the current-user Run registry value, stops an old instance, and optionally starts a new one.
-- `--uninstall` removes the Run registry value and stops the app.
+- `--install` writes the current-user Run registry value and Explorer context menu entries, stops an old instance, and optionally starts a new one.
+- `--uninstall` removes the Run registry value and Explorer context menu entries, then stops the app.
+- `--add-to-dock PATH` and `--add-to-launchpad PATH` are used by the Explorer context menu to update `settings.ini`.
 - `--test` opens the sampler, waits for a real PDH interval, prints one sample, and logs it.
 - default startup creates a single-instance mutex, loads settings, applies power-saving mode, initializes `PdhSampler`, and runs `WidgetForm`.
 
@@ -155,7 +156,7 @@ The separate clock window follows the same fullscreen hiding behavior.
 
 ## Build
 
-`Build-Arm64.ps1` compiles the single source file with Roslyn:
+`Build-Arm64.ps1` compiles the main source file plus the focused source directories with Roslyn:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Build-Arm64.ps1
@@ -192,9 +193,9 @@ powershell -ExecutionPolicy Bypass -File .\Build-Arm64.ps1 -OutputPath .\out\Des
 
 ## Install and Uninstall
 
-`Install.ps1` builds the executable if missing, writes current-user autostart, stops any running instance, and starts the widget unless `-NoStart` is passed.
+`Install.ps1` builds the executable if missing, writes current-user autostart and Explorer context menu entries, stops any running instance, and starts the widget unless `-NoStart` is passed.
 
-`Uninstall.ps1` removes the current-user autostart value and stops the widget unless `-KeepRunning` is passed.
+`Uninstall.ps1` removes the current-user autostart value and Explorer context menu entries, then stops the widget unless `-KeepRunning` is passed.
 
 The `.cmd` wrappers exist for Explorer launches, keeping a visible command window open for the user.
 
@@ -234,11 +235,10 @@ Before sharing a build:
 - NPU counters are not consistently exposed across Windows on ARM systems.
 - Battery power/charge rate display depends on WMI battery data.
 - WorkerW desktop-parent mode is intentionally experimental.
-- The codebase is currently a single large source file, which keeps distribution simple but makes targeted unit testing harder.
+- The codebase still uses a script-first build rather than a project file, which keeps distribution simple but makes IDE tooling and targeted tests less direct.
 
 ## Suggested Future Improvements
 
-- Split `DesktopPerfWidget.cs` into focused files once the public behavior stabilizes.
 - Add a small project file for IDE builds while keeping the current script build path.
 - Add automated smoke tests around settings parsing and metric-order normalization.
 - Publish signed release binaries through GitHub Releases.

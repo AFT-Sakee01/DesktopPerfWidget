@@ -6,10 +6,12 @@
 bin/
 obj/
 out/
+packages/
 
 # Logs and local runtime data
 *.log
 *.tmp
+_backups/
 
 # Visual Studio / editor state
 .vs/
